@@ -2155,20 +2155,35 @@ def repair_tool_call(agent, tool_name: str) -> str | None:
         if c and c in agent.valid_tool_names:
             return c
 
-    # Semantic aliases for names that mean "run a shell command" but
-    # are outside the lexical reach of the deterministic and fuzzy
-    # repair paths. The most common offender is `shell` for `terminal`:
-    # `SequenceMatcher(None, 'shell', 'terminal').ratio() == 0.3077`,
-    # which is below the 0.7 fuzzy cutoff. Lowering the global cutoff
-    # would introduce false positives on unrelated names and is not
-    # acceptable, so we handle this class explicitly.
-    _SEMANTIC_SHELL_ALIASES = {
-        'shell', 'bash', 'sh', 'zsh', 'shell_command',
-        'run_shell', 'run_command', 'exec_command',
-        'execute_command', 'run_terminal_cmd',
-    }
-    if lowered in _SEMANTIC_SHELL_ALIASES and 'terminal' in agent.valid_tool_names:
-        return 'terminal'
+    # Semantic aliases for names whose meaning is unambiguous but whose
+    # spelling is outside the lexical reach of the deterministic and
+    # fuzzy repair paths. The most common offender is `shell` for
+    # `terminal`: `SequenceMatcher(None, 'shell', 'terminal').ratio()
+    # == 0.3077`, which is below the 0.7 fuzzy cutoff. Lowering the
+    # global cutoff would introduce false positives on unrelated names
+    # and is not acceptable, so we handle this class explicitly.
+    #
+    # We match against ``normalized`` (the ``_norm`` / lowercase form)
+    # so variants like ``Shell``, ``SHELL``, ``run-command`` and
+    # ``run command`` resolve without extra entries.
+    _SEMANTIC_ALIASES = (
+        # shell-command vocabulary -> terminal
+        ('shell', 'terminal'),
+        ('bash', 'terminal'),
+        ('sh', 'terminal'),
+        ('zsh', 'terminal'),
+        ('shell_command', 'terminal'),
+        ('run_shell', 'terminal'),
+        ('run_command', 'terminal'),
+        ('exec_command', 'terminal'),
+        ('execute_command', 'terminal'),
+        ('run_terminal_cmd', 'terminal'),
+        # verified-argument-safe mapping -> search_files
+        ('grep', 'search_files'),
+    )
+    for alias_norm, canonical in _SEMANTIC_ALIASES:
+        if normalized == alias_norm and canonical in agent.valid_tool_names:
+            return canonical
 
     # Fuzzy match as last resort.
     matches = get_close_matches(lowered, agent.valid_tool_names, n=1, cutoff=0.7)

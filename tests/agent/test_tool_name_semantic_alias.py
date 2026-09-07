@@ -2,9 +2,10 @@
 
 This file binds to the alias table introduced to map names like `shell`,
 `bash`, `sh`, `zsh`, `shell_command`, `run_shell`, `run_command`,
-`exec_command`, `execute_command`, and `run_terminal_cmd` to `terminal`
-even though they are lexically unrelated (e.g. 'shell' vs 'terminal'
-score only 0.3077 on difflib SequenceMatcher).
+`exec_command`, `execute_command`, and `run_terminal_cmd` to `terminal`,
+and `grep` to `search_files`, even though they are lexically unrelated
+(e.g. 'shell' vs 'terminal' score only 0.3077 on difflib
+SequenceMatcher).
 """
 from __future__ import annotations
 
@@ -92,6 +93,38 @@ class TestSemanticShellAliases(unittest.TestCase):
                     repair_tool_call(self._agent({"terminal", "read_file"}), variant),
                     "terminal",
                 )
+
+    def test_hyphen_forms_map_to_terminal(self):
+        for variant in ("run-command", "run command", "Run-Command"):
+            with self.subTest(variant=variant):
+                self.assertEqual(
+                    repair_tool_call(self._agent({"terminal", "read_file"}), variant),
+                    "terminal",
+                )
+
+
+class TestSemanticGrepAlias(unittest.TestCase):
+    """`grep` -> `search_files` mapping."""
+
+    def _agent(self, tool_names):
+        return SimpleNamespace(valid_tool_names=set(tool_names))
+
+    def test_grep_maps_to_search_files(self):
+        self.assertEqual(
+            repair_tool_call(self._agent({"search_files", "read_file"}), "grep"),
+            "search_files",
+        )
+
+    def test_grep_returns_none_when_search_files_disabled(self):
+        self.assertIsNone(
+            repair_tool_call(self._agent({"read_file", "web_search"}), "grep")
+        )
+
+    def test_grep_precedence_when_grep_is_registered(self):
+        self.assertEqual(
+            repair_tool_call(self._agent({"grep", "search_files"}), "grep"),
+            "grep",
+        )
 
 
 class TestSemanticAliasGuard(unittest.TestCase):

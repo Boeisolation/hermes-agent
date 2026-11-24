@@ -160,8 +160,8 @@ class PlatformEntry:
     # ``gateway.platforms.send_targets.StandaloneSendPolicy`` or None (generic send routing).
     standalone_send: Optional[Any] = None
     # ``(extra config key, default port)`` for an adapter that binds a host TCP port (WeCom callback):
-    # ``gateway.config.platform_binds_port`` (multiplex shared listener, migration blockers) and the
-    # dashboard topology read it. () = binds no port.
+    # ``gateway.config.platform_binds_port`` (multiplex shared listener, migration blockers) reads it;
+    # the dashboard reads the port actually bound from runtime status instead. () = binds no port.
     listen_port: tuple = ()
     # --- dashboard ---
     # Channels-page card metadata (hermes_cli/web_server_messaging.py, Desktop + web dashboard).

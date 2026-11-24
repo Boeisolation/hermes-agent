@@ -398,6 +398,10 @@ def test_secondary_port_binder_is_notice_with_ingress_and_blocker_without(fleet,
 def test_a_plugin_only_the_secondary_installed_moves_onto_the_listener(fleet):
     """Both capabilities are read in the owning profile's plugin scope: a port-binding plugin platform
     that only ``ops`` has is a URL-change notice, not a blocker."""
+    (fleet.root / ".env").write_text(
+        "TELEGRAM_BOT_TOKEN=111111:default-token\nAPI_SERVER_KEY=default-api-key-abcdef\n", encoding="utf-8")
+    (fleet.root / "config.yaml").write_text(
+        "model:\n  default: x\nplatforms:\n  api_server:\n    enabled: true\n", encoding="utf-8")
     ops = fleet.root / "profiles/ops"
     (ops / ".env").write_text("DISCORD_BOT_TOKEN=ops-discord-333333\n", encoding="utf-8")
     (ops / "config.yaml").write_text(
@@ -419,6 +423,27 @@ def test_a_plugin_only_the_secondary_installed_moves_onto_the_listener(fleet):
         _reset_plugin_managers_for_tests()
     assert not any("seamcb" in b for b in plan.blockers), plan.blockers
     assert any("seamcb" in n and "/p/ops/" in n for n in plan.notices), plan.notices
+
+
+def test_a_secondary_port_binder_needs_a_default_listener(fleet):
+    """Its /p/<profile>/ app hangs off the default's api_server/webhook: with neither enabled on the
+    default, folding a secondary whose own gateway serves it today is refused (it would be served
+    nowhere); with the default's api_server on, it is the URL-change notice."""
+    (fleet.root / "profiles/ops/.env").write_text(
+        "DISCORD_BOT_TOKEN=ops-discord-333333\nLINE_CHANNEL_ACCESS_TOKEN=t\nLINE_CHANNEL_SECRET=s\n",
+        encoding="utf-8")
+    (fleet.root / "profiles/ops/config.yaml").write_text(
+        "platforms:\n  line:\n    enabled: true\n", encoding="utf-8")
+    plan = gm.build_migration_plan()
+    assert any("line" in b and "api_server" in b for b in plan.blockers), plan.blockers
+
+    (fleet.root / ".env").write_text(
+        "TELEGRAM_BOT_TOKEN=111111:default-token\nAPI_SERVER_KEY=default-api-key-abcdef\n", encoding="utf-8")
+    (fleet.root / "config.yaml").write_text(
+        "model:\n  default: x\nplatforms:\n  api_server:\n    enabled: true\n", encoding="utf-8")
+    plan = gm.build_migration_plan()
+    assert not any("line" in b for b in plan.blockers), plan.blockers
+    assert any("line" in n and "/p/ops/" in n for n in plan.notices), plan.notices
 
 
 def test_serves_profile_prefix_is_read_from_adapter_classes():

@@ -66,8 +66,8 @@ def _probe_gateway_health() -> tuple[bool, dict | None]:
 
 # ``platform-name -> (config port key, adapter default)`` for port-binding gateway platforms.
 # Mirrors PORT_BINDING_PLATFORM_VALUES (gateway/config.py) and each adapter's DEFAULT_PORT /
-# DEFAULT_WEBHOOK_PORT; a plugin platform declares its own (``PlatformEntry.listen_port``).
-# Display-only data for the topology readout, not a bind source.
+# DEFAULT_WEBHOOK_PORT; a plugin platform's bound port is read from the ``listener_base`` its
+# gateway published (``shared_ingress.bind_listener``). Display-only, not a bind source.
 _PORT_BINDING_PLATFORM_PORTS: dict[str, tuple[str, int]] = {
     "webhook": ("port", 8644), "api_server": ("port", 8642), "msgraph_webhook": ("port", 8646),
     "feishu": ("webhook_port", 8765), "bluebubbles": ("webhook_port", 8645),
@@ -79,24 +79,34 @@ _PORT_BINDING_PLATFORM_PORTS: dict[str, tuple[str, int]] = {
 _PLATFORM_DEAD_STATES = frozenset({"fatal", "disconnected", "stopped"})
 
 
+def _published_listener_port(state: dict) -> Optional[int]:
+    """Port of the ``listener_base`` (``http://host:port``) a gateway stamped after a real bind."""
+    from urllib.parse import urlsplit
+    base = state.get("listener_base")
+    if not isinstance(base, str) or not base:
+        return None
+    try:
+        return urlsplit(base).port
+    except ValueError:
+        return None
+
+
 def _profile_platform_ports(profile_home: Path, runtime: Optional[dict]) -> dict[str, int]:
     """Best-effort ``platform -> host TCP port`` for one profile's live gateway.
 
     Ports come from the profile's own config.yaml (``gateway.platforms`` then top-level
     ``platforms`` — later wins, matching load_gateway_config precedence), falling back to the
     adapter default. Env-var overrides (e.g. WEBHOOK_PORT in that profile's .env) are not resolved.
+    A ``listener_base`` the gateway published after a real bind wins: it is the port actually open,
+    and it is the only source for a plugin platform, read without loading that profile's plugins.
     """
-    from gateway.config import plugin_listen_port
-    from hermes_cli.profiles import profile_is_parked
     platforms = (runtime or {}).get("platforms") or {}
-    # A parked profile's plugins never run here (read-only probe): its registry scope answers as loaded.
-    discover = not profile_is_parked(profile_home)
-    port_specs = {name: _PORT_BINDING_PLATFORM_PORTS.get(name) or plugin_listen_port(name, profile_home, discover=discover)
-                  for name, state in platforms.items()
-                  if isinstance(state, dict) and state.get("state") not in _PLATFORM_DEAD_STATES}
-    active = [name for name, spec in port_specs.items() if spec]
+    live = {name: state for name, state in platforms.items()
+            if isinstance(state, dict) and state.get("state") not in _PLATFORM_DEAD_STATES}
+    published = {name: port for name, state in live.items() if (port := _published_listener_port(state))}
+    active = [name for name in live if name in _PORT_BINDING_PLATFORM_PORTS and name not in published]
     if not active:
-        return {}
+        return published
 
     blocks: dict[str, dict] = {}
     try:
@@ -113,9 +123,9 @@ def _profile_platform_ports(profile_home: Path, runtime: Optional[dict]) -> dict
     except Exception:
         blocks = {}
 
-    ports: dict[str, int] = {}
+    ports: dict[str, int] = dict(published)
     for name in active:
-        port_key, default_port = port_specs[name]
+        port_key, default_port = _PORT_BINDING_PLATFORM_PORTS[name]
         block = blocks.get(name) or {}
         extra = block.get("extra") if isinstance(block.get("extra"), dict) else {}
         raw = block.get(port_key, (extra or {}).get(port_key, default_port))

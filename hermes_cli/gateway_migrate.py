@@ -598,9 +598,12 @@ def _listener_url(default_cfg, platform_value: str, profile: str) -> str:
 def _check_secondary_port_binders(plan: MigrationPlan, configs: dict[str, object]) -> None:
     """BLOCKER when a secondary enables a port-binding platform with no ``/p/<profile>/`` ingress
     (the multiplexer skips the whole profile); NOTICE (URL changes) when the ingress exists."""
-    from gateway.config import platform_binds_port
+    from gateway.config import SHARED_LISTENER_MIRROR_PLATFORMS, Platform, platform_binds_port
     from hermes_cli.profiles import profile_is_parked
     default_cfg = configs.get("default")
+    default_platforms = getattr(default_cfg, "platforms", None) or {}
+    default_listener = any(getattr(default_platforms.get(p), "enabled", False)
+                           for p in (Platform.API_SERVER, Platform.WEBHOOK))
     for profile in plan.secondaries:
         cfg = configs.get(profile.name)
         if cfg is None:
@@ -610,7 +613,17 @@ def _check_secondary_port_binders(plan: MigrationPlan, configs: dict[str, object
                     platform.value, platform_config.extra, home=profile.home,
                     discover=not profile_is_parked(profile.home)):
                 continue
-            if platform_serves_profile_prefix(platform.value, profile.home):
+            if platform.value not in SHARED_LISTENER_MIRROR_PLATFORMS and not default_listener:
+                # Its /p/<profile>/ app hangs off the default's api_server/webhook; with neither the
+                # multiplexer serves it nowhere (the runner refuses to start it). A secondary whose
+                # own gateway serves it today must keep that gateway; one with none loses nothing.
+                (plan.blockers if profile.has_gateway else plan.notices).append(
+                    f"Profile '{profile.name}' enables {platform.value}, which binds its own port; under "
+                    f"multiplex it is served at /p/{profile.name}/ on the default profile's api_server or "
+                    f"webhook listener, and the default profile enables neither. Enable api_server (or "
+                    f"webhook) on the default profile first."
+                )
+            elif platform_serves_profile_prefix(platform.value, profile.home):
                 plan.notices.append(
                     f"Profile '{profile.name}': {platform.value} moves onto the default listener at "
                     f"{_listener_url(default_cfg, platform.value, profile.name)} (its key/secret is "

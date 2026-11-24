@@ -340,8 +340,8 @@ def plugin_listen_port(platform_value: str, home: Optional[Path] = None, *, disc
     """``PlatformEntry.listen_port`` (``(extra key, default port)``) of a registered plugin platform,
     else ``()``. Plugins register per profile home, so a caller outside the owning profile's scope
     (a multiplexed secondary, another profile's dashboard row) passes *home*: the lookup then runs
-    in that home's registry scope. *discover* also runs that home's plugin discovery first (the
-    dashboard, which may never have loaded it); never for a parked profile, whose plugins must not
+    in that home's registry scope. *discover* also runs that home's plugin discovery first (a
+    migration preflight that may never have loaded it); never for a parked profile, whose plugins must not
     run in this process. A lookup by name imports a deferred adapter, as every registry read does."""
     from agent.runtime_scope import bind_profile_scope
 

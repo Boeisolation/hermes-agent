@@ -901,10 +901,8 @@ async def _start_gateway_runtime(config: Optional[GatewayConfig] = None, replace
         # A platform plugin owed to the credentials this profile has installs beside the start, never
         # long ahead of it: one landing within the head start is in the runner's config; a slower one
         # (a clone, another installer's lock) leaves the ready platforms serving and starts when it lands.
-        from gateway.run_platform_reconcile import (
-            recover_plugins_beside_start, recovered_before_start, start_recovered_platforms)
-        _plugin_recovery = recover_plugins_beside_start()
-        _recovered = await recovered_before_start(_plugin_recovery)
+        from gateway.run_platform_reconcile import recover_plugins_for_start, start_recovered_platforms
+        _recovered, _plugin_recovery = await recover_plugins_for_start()
         if _recovered and config is None:
             resolved_config = _reload_config_keeping_multiplex_verdict(resolved_config)
 
@@ -991,8 +989,7 @@ async def _start_gateway_runtime(config: Optional[GatewayConfig] = None, replace
         preload_stop_path_modules()
 
         _early_verdict = await _start_gateway_run_runner(runner, _signal_initiated_shutdown)
-        if _early_verdict is None and _recovered is None:
-            start_recovered_platforms(runner, _plugin_recovery)
+        start_recovered_platforms(runner, _plugin_recovery)
         if _early_verdict is not None:
             await await_session_socket_preload(ws_preload)  # never left unawaited on the way out
             return _early_verdict

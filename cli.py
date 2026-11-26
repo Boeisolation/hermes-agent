@@ -497,6 +497,11 @@ def _run_cleanup(*, notify_session_finalize: bool = True):
             _shutdown_agent_memory_provider(_active_agent_ref)
         except Exception as e:
             logger.warning("CLI cleanup memory shutdown failed: %s", e, exc_info=True)
+        try:
+            from hermes_cli.auth import wait_for_nous_refresh_idle
+            wait_for_nous_refresh_idle()
+        except Exception as e:
+            logger.debug("Nous refresh exit wait failed: %s", e)
     finally:
         _cleanup_in_progress = False
 

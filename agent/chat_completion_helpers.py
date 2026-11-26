@@ -74,6 +74,89 @@ _FALLBACK_EXHAUSTED_COOLDOWN_S = 5.0
 # double traffic every attempt, while later turns re-arm automatically.
 _STREAM_5XX_PROBE_WINDOW_S = 60.0
 
+# ── Per-provider proactive rate limiting ──────────────────────────────
+# 免费层模型有严格的 RPM 限制。本模块级追踪器在请求发出前强制同一 provider
+# endpoint 的最小间隔，把 429 级联挡在发生之前。分组键是 base_url 的 hostname，
+# 因此同一平台的所有模型共享一个计时器。
+#
+# 间隔取值依据（2026-08-11 实测响应头）：
+#   Cerebras  x-ratelimit-limit-requests-minute: 5   ← 全链最紧，12s = 5 RPM
+#   Groq      x-ratelimit-limit-requests: 14400/日（约束实为 6000 TPM）
+#   Gemini / OpenRouter / NVIDIA NIM / Z.AI  不返回限额头
+# 默认值按"免费模型中最低的 RPM"设定，即 Cerebras 的 5 RPM。
+_PROVIDER_RATE_LIMIT_SECONDS = 12.0
+
+_PROVIDER_RATE_LIMIT_OVERRIDES: dict[str, float] = {
+    "open.bigmodel.cn": 2.0,
+    "openrouter.ai": 3.0,
+}
+
+_PROVIDER_RATE_LIMIT_PER_MODEL_HOSTS = {
+    "aihubmix.com",
+}
+
+_PROVIDER_RATE_LIMIT_EXCLUDED = {
+    "nous",
+    "nine-router",
+    "custom:nine-router",
+}
+_provider_last_request: dict[str, float] = {}
+_provider_rate_lock = threading.Lock()
+
+
+def _provider_rate_limit_key(agent) -> str:
+    """Return a normalized key for rate-limit tracking."""
+    base_url = str(getattr(agent, "_base_url_lower", "") or getattr(agent, "base_url", "") or "").strip()
+    if base_url:
+        from urllib.parse import urlparse
+        try:
+            parsed = urlparse(base_url)
+            host = parsed.netloc.lower()
+            if host in _PROVIDER_RATE_LIMIT_PER_MODEL_HOSTS:
+                model = str(getattr(agent, "model", "") or "").strip().lower()
+                if model:
+                    return f"{host}|{model}"
+            if host:
+                return host
+        except Exception:
+            pass
+    return str(getattr(agent, "provider", "") or "").strip().lower()
+
+
+def _enforce_provider_rate_limit(agent) -> None:
+    """Sleep if needed to respect the per-provider minimum request interval."""
+    key = _provider_rate_limit_key(agent)
+    if not key:
+        return
+    if "192.168.5." in key:
+        return
+
+    provider_slug = str(getattr(agent, "provider", "") or "").strip().lower()
+    if provider_slug in _PROVIDER_RATE_LIMIT_EXCLUDED:
+        return
+    if provider_slug == "nous" or "nous" in provider_slug:
+        return
+
+    interval = _PROVIDER_RATE_LIMIT_OVERRIDES.get(key.split("|", 1)[0], _PROVIDER_RATE_LIMIT_SECONDS)
+
+    with _provider_rate_lock:
+        now = time.time()
+        last = _provider_last_request.get(key, 0.0)
+        elapsed = now - last
+        if elapsed < interval:
+            wait = interval - elapsed
+            _provider_last_request[key] = now + wait
+        else:
+            wait = 0.0
+            _provider_last_request[key] = now
+
+    if wait > 0:
+        logger.info(
+            "Rate limit: waiting %.1fs before requesting %s (min interval %.0fs)",
+            wait, key, interval,
+        )
+        time.sleep(wait)
+
 
 def _context_thread_target(callback):
     """Bind a no-argument thread target to the caller's ContextVars."""
@@ -761,6 +844,7 @@ def _dispatch_nonstreaming_api_request(agent, api_kwargs: dict, *, make_client):
     so callers can register it with their abort/close machinery; bedrock / MoA
     manage their own clients. Interrupt/abort/close semantics stay in callers.
     """
+    _enforce_provider_rate_limit(agent)
     if agent.api_mode == "codex_responses":
         return agent._run_codex_stream(api_kwargs, client=make_client("codex_stream_request"),
             on_first_delta=getattr(agent, "_codex_on_first_delta", None))
@@ -2502,6 +2586,7 @@ class _BedrockStream:
         return _on
 
     def _open_stream(self, next_api_kwargs: dict[str, Any]):
+        _enforce_provider_rate_limit(self.agent)
         return _bedrock_converse_call(dict(next_api_kwargs), stream=True, on_stream_denied=self._fall_back_to_converse)
 
     def _fall_back_to_converse(self, client, final_kwargs: dict, exc: Exception):
@@ -2876,6 +2961,7 @@ class _StreamingCall(StreamingWaitMonitor):
         return usage, finish_reason
 
     def _open_chat_stream(self, stream_kwargs: dict[str, Any]):
+        _enforce_provider_rate_limit(self.agent)
         # Native Gemini rejects OpenAI's usage-streaming extension; so do strict endpoints that
         # already 4xx'd on it on this route (``_stream_options_unsupported``, #9705; see route_verdicts).
         if not is_native_gemini_base_url(self.agent.base_url) and not getattr(self.agent, "_stream_options_unsupported", False):
@@ -3332,6 +3418,7 @@ class _StreamingCall(StreamingWaitMonitor):
         accumulator = relay_llm.AnthropicStreamAccumulator()
 
         def _open_anthropic_stream(next_api_kwargs: dict[str, Any]):
+            _enforce_provider_rate_limit(self.agent)
             final_kwargs = dict(next_api_kwargs)
             sanitize_anthropic_kwargs(final_kwargs, log_prefix=getattr(self.agent, "log_prefix", ""))
             manager = request_client.messages.stream(**final_kwargs)

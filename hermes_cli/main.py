@@ -85,6 +85,13 @@ def _exit_after_oneshot(rc: object) -> None:
 
     See #30387, #43055.
     """
+    # Local patch (ai-agents, 2026-09-27): os._exit below would kill a daemon
+    # thread mid Nous refresh; wait for in-flight refreshes to persist first.
+    try:
+        from hermes_cli.auth import wait_for_nous_refresh_idle
+        wait_for_nous_refresh_idle()
+    except Exception:
+        pass
     for stream in (sys.stdout, sys.stderr):
         try:
             stream.flush()

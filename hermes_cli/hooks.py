@@ -338,8 +338,18 @@ def _doctor_one(spec, shell_hooks) -> int:
             elapsed = result.get("elapsed_seconds", 0)
             stdout = (result.get("stdout") or "").strip()
             if not stdout:
-                print(f"      ✓ ran clean with empty stdout "
-                      f"(exit={rc}, {elapsed}s) — hook is observer-only")
+                if spec.event in shell_hooks._BLOCKING_EVENTS and spec.fail_closed:
+                    print(f"      ✓ ran clean, allowed synthetic payload "
+                          f"(exit={rc}, {elapsed}s) — BLOCKING + fail_closed: "
+                          f"can veto {spec.event}")
+                elif spec.event in shell_hooks._BLOCKING_EVENTS:
+                    print(f"      ✓ ran clean, allowed synthetic payload "
+                          f"(exit={rc}, {elapsed}s) — BLOCKING: can veto "
+                          f"{spec.event} (set fail_closed to also fail on error)")
+                else:
+                    print(f"      ✓ ran clean, allowed synthetic payload "
+                          f"(exit={rc}, {elapsed}s) — non-blocking event: "
+                          f"output is advisory only")
             else:
                 try:
                     json.loads(stdout)

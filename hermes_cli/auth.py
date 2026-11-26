@@ -62,9 +62,9 @@ from hermes_cli.auth_nous import (
     _quarantine_nous_pool_entries, _read_shared_nous_state, _refresh_access_token,
     _refresh_nous_or_quarantine, _select_nous_invoke_jwt, _sync_nous_pool_from_auth_store,
     _token_fingerprint, _try_import_shared_nous_state, _validate_nous_inference_url_from_network,
-    _write_shared_nous_state, fetch_nous_models, get_nous_auth_status_local,
+    _write_shared_nous_state, _guard_nous_refresh, fetch_nous_models, get_nous_auth_status_local,
     get_nous_session_validity, persist_nous_credentials, refresh_nous_oauth_from_state,
-    resolve_nous_runtime_credentials, step_up_nous_billing_scope)
+    resolve_nous_runtime_credentials, step_up_nous_billing_scope, wait_for_nous_refresh_idle)
 nous_portal_base_url = _nous_portal_base_url
 from hermes_cli.auth_minimax import (
     _MINIMAX_OAUTH_ERROR_BODY_LIMIT, _login_minimax_oauth, _minimax_oauth_login, _minimax_pkce_pair,
@@ -1785,6 +1785,7 @@ _RESOLVE_TOKEN_CACHE: dict[str, tuple[float, str]] = {}
 _RESOLVE_TOKEN_CACHE_TTL_S = 5.0
 
 
+@_guard_nous_refresh
 def resolve_nous_access_token(
     *,
     timeout_seconds: float = 15.0,

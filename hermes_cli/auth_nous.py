@@ -685,6 +685,83 @@ def _quarantine_nous_pool_entries(
     return removed
 
 
+# ── Exit guard for in-flight Nous refreshes (local patch: ai-agents, 2026-09-27) ──
+# A refresh POST rotates the single-use refresh token on the portal. If the
+# process exits after the POST is sent but before the new token is persisted,
+# the next refresh reuses the old token and the portal revokes the whole login.
+# Daemon threads (bg-review, auxiliary clients) can start such a refresh while
+# the process is exiting. Exit paths call wait_for_nous_refresh_idle(): from
+# then on a daemon thread that starts a new top-level refresh parks before any
+# network I/O and ends with the process, and calls already in flight are waited
+# for so they reach their persist step. Parking never raises, because a raised
+# error would make the credential pool mark the entry exhausted on disk.
+import functools as _functools
+
+_nous_refresh_cond = threading.Condition()
+_nous_refresh_inflight = 0
+_nous_refresh_exiting = False
+_nous_refresh_depth = threading.local()
+
+
+@contextmanager
+def _nous_refresh_inflight_guard():
+    global _nous_refresh_inflight
+    depth = getattr(_nous_refresh_depth, "value", 0)
+    with _nous_refresh_cond:
+        park = bool(
+            depth == 0
+            and _nous_refresh_exiting
+            and threading.current_thread().daemon
+        )
+        if not park:
+            _nous_refresh_inflight += 1
+    if park:
+        _oauth_trace("nous_refresh_parked_on_exit", thread=threading.current_thread().name)
+        threading.Event().wait()  # never set: this daemon thread ends with the process
+        raise RuntimeError("unreachable: parked Nous refresh resumed")
+    _nous_refresh_depth.value = depth + 1
+    try:
+        yield
+    finally:
+        _nous_refresh_depth.value = depth
+        with _nous_refresh_cond:
+            _nous_refresh_inflight -= 1
+            _nous_refresh_cond.notify_all()
+
+
+def _guard_nous_refresh(fn):
+    @_functools.wraps(fn)
+    def _wrapper(*args, **kwargs):
+        with _nous_refresh_inflight_guard():
+            return fn(*args, **kwargs)
+    return _wrapper
+
+
+def wait_for_nous_refresh_idle(timeout_seconds: float = 20.0) -> bool:
+    """Call once on process exit. True when no Nous refresh is in flight."""
+    global _nous_refresh_exiting
+    started = time.monotonic()
+    deadline = started + max(0.0, float(timeout_seconds))
+    with _nous_refresh_cond:
+        _nous_refresh_exiting = True
+        inflight_at_start = _nous_refresh_inflight
+        while _nous_refresh_inflight > 0:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            _nous_refresh_cond.wait(remaining)
+        idle = _nous_refresh_inflight == 0
+    if inflight_at_start:
+        _oauth_trace(
+            "nous_refresh_exit_wait",
+            inflight=inflight_at_start,
+            idle=idle,
+            waited_ms=int((time.monotonic() - started) * 1000),
+        )
+    return idle
+
+
+@_guard_nous_refresh
 def _try_import_shared_nous_state(*, timeout_seconds: float = 15.0) -> Optional[dict[str, Any]]:
     """Rehydrate Nous OAuth state from the shared store via a forced refresh.
 
@@ -1166,6 +1243,7 @@ class _NousRuntimeResolve:
                 self.refresh(client, invoke_jwt_status)
 
 
+@_guard_nous_refresh
 def resolve_nous_runtime_credentials(
     *, timeout_seconds: float = 15.0, insecure: Optional[bool] = None,
     ca_bundle: Optional[str] = None, force_refresh: bool = False,

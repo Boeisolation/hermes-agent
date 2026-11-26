@@ -437,6 +437,16 @@ def _registered_plugin_platform(name: str) -> bool:
     return False
 
 
+def moved_platform_hint(platform_name: str) -> str:
+    """``". <label> moved out of core into the '<plugin>' plugin: install it with `<command>`"`` for a
+    platform that left core whose plugin is not loaded, else ``""``: a route saved while core shipped it
+    names the install instead of failing as an unknown target."""
+    from gateway.platform_registry import platform_registry
+    from hermes_cli.left_core_migration import platform_install_hint
+    name = platform_name.strip().lower()
+    return "" if platform_registry.get(name) else platform_install_hint(name)
+
+
 def _resolve_home_env_var(platform_name: str) -> str:
     """Env var name for a platform's cron home channel (``PlatformEntry.cron_deliver_env_var``)."""
     return _plugin_cron_env_var(platform_name.lower())
@@ -1724,7 +1734,8 @@ def _unresolved_delivery_outcome(job: dict, for_failure: bool) -> Optional[str]:
             "skipping delivery (output saved in last_output)",
             job.get("name", job.get("id", "?")))
         return None
-    msg = f"no delivery target resolved for deliver={deliver_value}"
+    hints = "".join(moved_platform_hint(part.split(":", 1)[0]) for part in deliver_value.split(","))
+    msg = f"no delivery target resolved for deliver={deliver_value}{hints}"
     logger.warning("Job '%s': %s", job["id"], msg)
     return msg
 
